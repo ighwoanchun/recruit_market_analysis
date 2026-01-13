@@ -13,27 +13,22 @@ jobs:
     timeout-minutes: 15
 
     env:
-      # --- Fact Cache Mode (enable) ---
-      FACT_CACHE_MODE: "true"
-      MAX_FACT_ITEMS: "15"
-      GEMINI_MODEL: "gemini-2.0-flash-lite"
+        # --- Modes ---
+        FACT_CACHE_MODE: "true"
+        WEEKLY_STRATEGY_REPORT_MODE: "true"
+        MAX_FACT_ITEMS: "15"
+        GEMINI_MODEL: "gemini-2.0-flash-lite"
 
-      # Slack
-      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        # Slack
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
-      # GCP / Vertex AI
-      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-      GCP_REGION: ${{ secrets.GCP_REGION }}
+        # GCP / Vertex AI
+        GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+        GCP_REGION: ${{ secrets.GCP_REGION }}
 
-      # Report settings
-      REPORT_DAYS: "7"
-      COMPETITORS: "saramin,jobkorea,remember"
-
-      # 전략리포트
-      FACT_CACHE_MODE: "true"
-      WEEKLY_STRATEGY_REPORT_MODE: "true"
-      MAX_FACT_ITEMS: "15"
-      GEMINI_MODEL: "gemini-2.0-flash-lite"
+        # Report settings
+        REPORT_DAYS: "7"
+        COMPETITORS: "saramin,jobkorea,remember"
 
     steps:
       - name: Checkout
