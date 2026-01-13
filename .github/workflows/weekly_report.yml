@@ -13,9 +13,10 @@ jobs:
     timeout-minutes: 15
 
     env:
- VERTEX_SMOKE_TEST: "true"
+      # ---- Smoke Test switches (TEMPORARY) ----
+      VERTEX_SMOKE_TEST: "true"
       GEMINI_MODEL: "gemini-2.0-flash-lite"
-    
+
       # Slack
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
@@ -91,3 +92,9 @@ jobs:
         with:
           name: weekly-report
           path: reports/weekly_report.md
+
+      - name: Upload smoke test artifact (optional)
+        uses: actions/upload-artifact@v4
+        with:
+          name: vertex-smoke-test
+          path: reports/fact_smoke_test.json
