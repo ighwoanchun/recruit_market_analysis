@@ -30,6 +30,10 @@ jobs:
         REPORT_DAYS: "7"
         COMPETITORS: "saramin,jobkorea,remember"
 
+        # 최근 14일에 중복키 없도록 1번씩만
+        LOOKBACK_DAYS: "14"
+        ALLOW_UNDATED_ITEMS: "false"
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
