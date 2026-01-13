@@ -5,24 +5,21 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from .company_map import CompanyMapper
 from .config import Settings
 from .collector_rss import Item, collect_news_for_competitor
-from .report_generator import build_draft_report, to_markdown
-from .slack_sender import send_to_slack
-
-from .vertex_llm import VertexLLM
-from .fact_extractor_vertex import FactExtractor
-from .storage_fact import FactStore
 from .dedup import dedup_by_url
-
+from .fact_extractor_vertex import FactExtractor
 from .facts_read import read_fact_payloads
+from .job_section_builder import CompetitorJobSource, build_jobs_section
+from .report_generator import build_draft_report, to_markdown
 from .report_strategy_renderer import render_strategy_report
-
 from .signal_classifier_vertex import SignalClassifier
+from .slack_sender import send_to_slack
+from .storage_fact import FactStore
 from .strategy_hypothesis_vertex import StrategyHypothesis
+from .vertex_llm import VertexLLM
 from .wanted_response_vertex import WantedResponse
-
-from .company_map import CompanyMapper
 
 
 def _now_utc() -> datetime:
@@ -32,7 +29,6 @@ def _now_utc() -> datetime:
 def _to_utc(dt: Optional[datetime]) -> Optional[datetime]:
     if dt is None:
         return None
-    # naive datetime이면 UTC로 간주(안전한 최저 가정)
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
@@ -125,7 +121,6 @@ def _payload_is_recent_enough(payload: dict, cutoff_utc: datetime) -> bool:
     pub = meta.get("published_date")
     if isinstance(pub, str) and len(pub) >= 10:
         try:
-            # YYYY-MM-DD
             dt = datetime.strptime(pub[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
             return dt >= cutoff_utc
         except Exception:
@@ -142,7 +137,6 @@ def _payload_is_recent_enough(payload: dict, cutoff_utc: datetime) -> bool:
         except Exception:
             return False
 
-    # 둘 다 없으면 오래된 것으로 간주(보수적)
     return False
 
 
@@ -167,7 +161,6 @@ def run_fact_cache_mode(settings: Settings, collected: Dict[str, List[Item]]) ->
 
     all_items = dedup_by_url(_flatten(collected), lambda x: x.url)
 
-    # ✅ 1) 오래된 기사 제거
     filtered: List[Item] = []
     skipped_old = 0
     skipped_undated = 0
@@ -241,6 +234,7 @@ def run_weekly_strategy_report(settings: Settings) -> None:
     - Signal(A/B/C) 분류 → A/B만 사용
     - '미분류'/'비교기사'는 가설 생성 제외
     - 경쟁사별 가설 → 원티드 대응 도출
+    - 공고 샘플 기반 직무군 분포 섹션을 맨 아래에 추가
     - Slack 1페이지 리포트 전송
     """
     llm = _vertex_llm_from_env()
@@ -253,7 +247,6 @@ def run_weekly_strategy_report(settings: Settings) -> None:
         send_to_slack(settings.slack_webhook_url, "*전략 리포트 생성 실패*: data/facts에 Fact가 없습니다.")
         return
 
-    # ✅ 1) 전략 리포트에서도 오래된 payload 제외
     payloads = [p for p in payloads if _payload_is_recent_enough(p, cutoff_utc)]
     if not payloads:
         send_to_slack(
@@ -313,6 +306,36 @@ def run_weekly_strategy_report(settings: Settings) -> None:
         payloads_by_company=payloads_by_key,
     )
 
+    # ---- Append Job Posting Analysis Section (Prototype) ----
+    # URL/selector는 env로 주입 (없으면 섹션은 '스킵' 표기)
+    job_sources = [
+        CompetitorJobSource(
+            name="사람인",
+            list_url=os.environ.get("SARMIN_JOB_LIST_URL", "").strip(),
+            link_css=os.environ.get("SARMIN_JOB_LINK_CSS", "a").strip(),
+            limit=_env_int("JOB_SAMPLE_LIMIT", 30),
+        ),
+        CompetitorJobSource(
+            name="잡코리아",
+            list_url=os.environ.get("JOBKOREA_JOB_LIST_URL", "").strip(),
+            link_css=os.environ.get("JOBKOREA_JOB_LINK_CSS", "a").strip(),
+            limit=_env_int("JOB_SAMPLE_LIMIT", 30),
+        ),
+        CompetitorJobSource(
+            name="리멤버",
+            list_url=os.environ.get("REMEMBER_JOB_LIST_URL", "").strip(),
+            link_css=os.environ.get("REMEMBER_JOB_LINK_CSS", "a").strip(),
+            limit=_env_int("JOB_SAMPLE_LIMIT", 30),
+        ),
+    ]
+    job_sources = [s for s in job_sources if s.list_url]
+
+    if job_sources:
+        jobs_section = build_jobs_section(job_sources)
+        report_text = report_text.rstrip() + "\n\n" + jobs_section
+    else:
+        report_text = report_text.rstrip() + "\n\n" + "*[공고 샘플 기반 직무군 분포(경쟁사별)]*\n- (설정된 리스트 URL이 없어 스킵)\n"
+
     reports_dir = Path("reports")
     reports_dir.mkdir(parents=True, exist_ok=True)
     (reports_dir / "weekly_strategy_report.md").write_text(report_text, encoding="utf-8")
@@ -338,16 +361,13 @@ def main() -> None:
     fact_cache_mode = _env_bool("FACT_CACHE_MODE", False)
     weekly_strategy_mode = _env_bool("WEEKLY_STRATEGY_REPORT_MODE", False)
 
-    # 1) cache facts (optional)
     if fact_cache_mode:
         run_fact_cache_mode(settings, collected)
 
-    # 2) strategy report (optional)
     if weekly_strategy_mode:
         run_weekly_strategy_report(settings)
         return
 
-    # 3) default weekly draft report
     if not fact_cache_mode:
         run_default_weekly_report(settings, collected)
 
