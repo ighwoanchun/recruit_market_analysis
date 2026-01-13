@@ -29,6 +29,12 @@ jobs:
       REPORT_DAYS: "7"
       COMPETITORS: "saramin,jobkorea,remember"
 
+      # 전략리포트
+      FACT_CACHE_MODE: "true"
+      WEEKLY_STRATEGY_REPORT_MODE: "true"
+      MAX_FACT_ITEMS: "15"
+      GEMINI_MODEL: "gemini-2.0-flash-lite"
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -87,6 +93,12 @@ jobs:
       - name: Run weekly pipeline
         run: |
           python -m app.pipeline_weekly
+
+      - name: Upload strategy report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-strategy-report
+          path: reports/weekly_strategy_report.md
 
       - name: Upload facts artifact
         uses: actions/upload-artifact@v4
