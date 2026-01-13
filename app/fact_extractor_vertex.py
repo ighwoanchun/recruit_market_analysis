@@ -17,21 +17,21 @@ USER_TEMPLATE = """
 아래 자료에서 사실(Fact)만 추출해줘.
 
 [출력 JSON 스키마]
-{
+{{
   "source": string,
   "url": string,
   "date_in_text": string | null,
   "company": string | null,
   "facts": [
-    {
+    {{
       "what_happened": string,
       "is_new_or_change": "new" | "change" | "unknown",
       "related_area": string | null,
-      "numbers": [{"name": string, "value": string}] 
-    }
+      "numbers": [{{"name": string, "value": string}}]
+    }}
   ],
   "uncertain": [string]
-}
+}}
 
 [규칙]
 - 기사/공지에 명시된 내용만. 추측 금지.
