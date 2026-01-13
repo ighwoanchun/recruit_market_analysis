@@ -16,10 +16,9 @@ jobs:
       # Slack
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
-      # (Placeholder for Vertex AI later)
+      # GCP / Vertex AI
       GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
       GCP_REGION: ${{ secrets.GCP_REGION }}
-      GCP_SA_KEY_JSON: ${{ secrets.GCP_SA_KEY_JSON }}
 
       # Report settings
       REPORT_DAYS: "7"
@@ -28,6 +27,47 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # ---- (1-6) Auth + Verification begins ----
+      - name: Authenticate to Google Cloud (Service Account Key JSON)
+        id: gcp-auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY_JSON }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Setup gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Verify GCP auth & project access
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "== gcloud version =="
+          gcloud --version
+
+          echo "== active account =="
+          gcloud auth list
+
+          echo "== set project =="
+          gcloud config set project "$GCP_PROJECT_ID"
+
+          echo "== access token check =="
+          gcloud auth print-access-token >/dev/null
+          echo "Access token OK"
+
+          echo "== project describe check =="
+          gcloud projects describe "$GCP_PROJECT_ID" --format="value(projectId)"
+          echo "Project access OK: $GCP_PROJECT_ID"
+
+          echo "== region (for Vertex AI) =="
+          echo "$GCP_REGION"
+      # ---- (1-6) Auth + Verification ends ----
 
       - name: Setup Python
         uses: actions/setup-python@v5
