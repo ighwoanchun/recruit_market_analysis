@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from .config import Settings
 from .collector_rss import Item, collect_news_for_competitor
@@ -21,8 +22,37 @@ from .signal_classifier_vertex import SignalClassifier
 from .strategy_hypothesis_vertex import StrategyHypothesis
 from .wanted_response_vertex import WantedResponse
 
-# NEW: company inference mapping
 from .company_map import CompanyMapper
+
+
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _to_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    if dt is None:
+        return None
+    # naive datetime이면 UTC로 간주(안전한 최저 가정)
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _env_int(name: str, default: int) -> int:
+    v = os.environ.get(name)
+    if not v:
+        return default
+    try:
+        return int(v)
+    except ValueError:
+        return default
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    v = (os.environ.get(name) or "").strip().lower()
+    if not v:
+        return default
+    return v in ("1", "true", "yes", "y", "on")
 
 
 def _collect_all(settings: Settings) -> Dict[str, List[Item]]:
@@ -52,9 +82,84 @@ def _vertex_llm_from_env() -> VertexLLM:
     )
 
 
+def _infer_group_key(payload: dict, mapper: CompanyMapper) -> str:
+    """
+    그룹 키 결정:
+    1) fact.company가 있으면 사용
+    2) 없으면 title+url 키워드 매칭
+    3) 복수 경쟁사 키워드면 '비교기사'
+    4) 아니면 '미분류'
+    """
+    fact = payload.get("fact", {}) or {}
+    meta = payload.get("meta", {}) or {}
+
+    company = fact.get("company")
+    if company:
+        return str(company).strip()
+
+    title = str(meta.get("title", "") or "")
+    url = str(meta.get("url", "") or "")
+    combined = f"{title} {url}"
+
+    hits = []
+    for kw, comp in mapper.keyword_to_company.items():
+        if kw.lower() in combined.lower():
+            hits.append(comp)
+    hits_unique = list(dict.fromkeys(hits))
+
+    if len(hits_unique) >= 2:
+        return "비교기사"
+
+    inferred = mapper.infer(combined)
+    return inferred if inferred else "미분류"
+
+
+def _payload_is_recent_enough(payload: dict, cutoff_utc: datetime) -> bool:
+    """
+    전략 리포트 단계에서 facts payload를 필터링:
+    - meta.published_date(YYYY-MM-DD)가 있으면 그 날짜 기준
+    - 없으면 meta.collected_at_utc 기준
+    """
+    meta = payload.get("meta", {}) or {}
+
+    pub = meta.get("published_date")
+    if isinstance(pub, str) and len(pub) >= 10:
+        try:
+            # YYYY-MM-DD
+            dt = datetime.strptime(pub[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            return dt >= cutoff_utc
+        except Exception:
+            pass
+
+    collected_at = meta.get("collected_at_utc")
+    if isinstance(collected_at, str) and collected_at:
+        try:
+            dt = datetime.fromisoformat(collected_at.replace("Z", "+00:00"))
+            dt = _to_utc(dt)
+            if dt is None:
+                return False
+            return dt >= cutoff_utc
+        except Exception:
+            return False
+
+    # 둘 다 없으면 오래된 것으로 간주(보수적)
+    return False
+
+
 def run_fact_cache_mode(settings: Settings, collected: Dict[str, List[Item]]) -> None:
+    """
+    FACT_CACHE_MODE=true 일 때:
+    - LOOKBACK_DAYS 이내 기사만 처리
+    - (ALLOW_UNDATED_ITEMS=false면) published_at 없는 건 제외
+    - URL 중복 제거 후 최대 MAX_FACT_ITEMS 개 Fact 추출
+    """
     model_name = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash-lite").strip()
-    max_items = int(os.environ.get("MAX_FACT_ITEMS", "15"))
+    max_items = _env_int("MAX_FACT_ITEMS", 15)
+
+    lookback_days = _env_int("LOOKBACK_DAYS", 14)
+    allow_undated = _env_bool("ALLOW_UNDATED_ITEMS", False)
+
+    cutoff_utc = _now_utc() - timedelta(days=lookback_days)
 
     llm = _vertex_llm_from_env()
     extractor = FactExtractor(llm=llm)
@@ -62,18 +167,39 @@ def run_fact_cache_mode(settings: Settings, collected: Dict[str, List[Item]]) ->
 
     all_items = dedup_by_url(_flatten(collected), lambda x: x.url)
 
+    # ✅ 1) 오래된 기사 제거
+    filtered: List[Item] = []
+    skipped_old = 0
+    skipped_undated = 0
+
+    for it in all_items:
+        pub = _to_utc(getattr(it, "published_at", None))
+        if pub is None:
+            if allow_undated:
+                filtered.append(it)
+            else:
+                skipped_undated += 1
+            continue
+
+        if pub < cutoff_utc:
+            skipped_old += 1
+            continue
+
+        filtered.append(it)
+
     saved = 0
-    skipped = 0
+    skipped_dup = 0
     failed = 0
 
-    for it in all_items[:max_items]:
+    for it in filtered[:max_items]:
         published_date = it.published_at.strftime("%Y-%m-%d") if it.published_at else None
 
         if store.exists(url=it.url):
-            skipped += 1
+            skipped_dup += 1
             continue
 
         raw_text = it.raw_summary or it.title
+
         try:
             fact_json = extractor.extract(
                 source=it.source,
@@ -96,66 +222,48 @@ def run_fact_cache_mode(settings: Settings, collected: Dict[str, List[Item]]) ->
     msg = (
         "*Fact Cache Mode 완료*\n"
         f"- Model: `{model_name}`\n"
+        f"- LOOKBACK_DAYS: {lookback_days} (cutoff_utc={cutoff_utc.date()})\n"
         f"- 최대 처리: {max_items}\n"
         f"- 저장: {saved}\n"
-        f"- 스킵(중복): {skipped}\n"
+        f"- 스킵(중복): {skipped_dup}\n"
+        f"- 스킵(오래됨): {skipped_old}\n"
+        f"- 스킵(날짜없음): {skipped_undated}\n"
         f"- 실패: {failed}\n"
     )
     send_to_slack(settings.slack_webhook_url, msg)
 
 
-def _infer_group_key(payload: dict, mapper: CompanyMapper) -> str:
-    """
-    그룹 키 결정:
-    1) fact.company가 있으면 사용
-    2) 없으면 title+url 키워드 매칭
-    3) 복수 경쟁사 키워드면 '비교기사'
-    4) 아니면 '미분류'
-    """
-    fact = payload.get("fact", {}) or {}
-    meta = payload.get("meta", {}) or {}
-
-    company = fact.get("company")
-    if company:
-        return str(company).strip()
-
-    title = str(meta.get("title", "") or "")
-    url = str(meta.get("url", "") or "")
-    combined = f"{title} {url}"
-
-    # 복수 경쟁사 언급 감지
-    hits = []
-    for kw, comp in mapper.keyword_to_company.items():
-        if kw.lower() in combined.lower():
-            hits.append(comp)
-    hits_unique = list(dict.fromkeys(hits))  # unique preserve order
-
-    if len(hits_unique) >= 2:
-        return "비교기사"
-
-    inferred = mapper.infer(combined)
-    return inferred if inferred else "미분류"
-
-
 def run_weekly_strategy_report(settings: Settings) -> None:
     """
     data/facts/에 저장된 Fact payload들을 읽어
+    - LOOKBACK_DAYS 이내 payload만 사용
     - company 보정 + 비교기사 분리
     - Signal(A/B/C) 분류 → A/B만 사용
-    - (중요) '미분류'/'비교기사'는 가설 생성 제외
+    - '미분류'/'비교기사'는 가설 생성 제외
     - 경쟁사별 가설 → 원티드 대응 도출
     - Slack 1페이지 리포트 전송
     """
     llm = _vertex_llm_from_env()
+
+    lookback_days = _env_int("LOOKBACK_DAYS", 14)
+    cutoff_utc = _now_utc() - timedelta(days=lookback_days)
 
     payloads = read_fact_payloads("data/facts")
     if not payloads:
         send_to_slack(settings.slack_webhook_url, "*전략 리포트 생성 실패*: data/facts에 Fact가 없습니다.")
         return
 
+    # ✅ 1) 전략 리포트에서도 오래된 payload 제외
+    payloads = [p for p in payloads if _payload_is_recent_enough(p, cutoff_utc)]
+    if not payloads:
+        send_to_slack(
+            settings.slack_webhook_url,
+            f"*전략 리포트 생성 실패*: LOOKBACK_DAYS={lookback_days} 기준으로 남는 Fact가 없습니다.",
+        )
+        return
+
     mapper = CompanyMapper.default()
 
-    # NEW: group by inferred key
     payloads_by_key: Dict[str, List[dict]] = {}
     for p in payloads:
         key = _infer_group_key(p, mapper)
@@ -169,13 +277,11 @@ def run_weekly_strategy_report(settings: Settings) -> None:
     response_by_company: Dict[str, dict] = {}
 
     for key, plist in payloads_by_key.items():
-        # ✅ exclude noisy groups from hypothesis generation
         if key in ("미분류", "비교기사"):
             continue
 
         facts = [p.get("fact", {}) for p in plist if isinstance(p.get("fact", {}), dict)]
 
-        # Signal classification per fact, keep A/B only
         ab_facts = []
         for f in facts:
             try:
@@ -191,7 +297,6 @@ def run_weekly_strategy_report(settings: Settings) -> None:
         if not ab_facts:
             continue
 
-        # Hypothesis + response (cap to reduce tokens)
         hyp = hypothesizer.infer(ab_facts[:8])
         resp = responder.propose(hyp)
 
@@ -202,7 +307,6 @@ def run_weekly_strategy_report(settings: Settings) -> None:
         send_to_slack(settings.slack_webhook_url, "*전략 리포트 생성 실패*: A/B 신호 Fact가 없습니다.")
         return
 
-    # Render using same renderer, but we need payloads grouped by company keys
     report_text = render_strategy_report(
         hypothesis_by_company=hypothesis_by_company,
         response_by_company=response_by_company,
@@ -231,14 +335,14 @@ def main() -> None:
     settings = Settings.from_env()
     collected = _collect_all(settings)
 
-    fact_cache_mode = os.environ.get("FACT_CACHE_MODE", "").lower() in ("1", "true", "yes")
-    weekly_strategy_mode = os.environ.get("WEEKLY_STRATEGY_REPORT_MODE", "").lower() in ("1", "true", "yes")
+    fact_cache_mode = _env_bool("FACT_CACHE_MODE", False)
+    weekly_strategy_mode = _env_bool("WEEKLY_STRATEGY_REPORT_MODE", False)
 
-    # 1) optionally cache facts in same run
+    # 1) cache facts (optional)
     if fact_cache_mode:
         run_fact_cache_mode(settings, collected)
 
-    # 2) strategy report mode
+    # 2) strategy report (optional)
     if weekly_strategy_mode:
         run_weekly_strategy_report(settings)
         return
