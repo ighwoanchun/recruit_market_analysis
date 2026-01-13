@@ -13,6 +13,9 @@ jobs:
     timeout-minutes: 15
 
     env:
+ VERTEX_SMOKE_TEST: "true"
+      GEMINI_MODEL: "gemini-2.0-flash-lite"
+    
       # Slack
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
