@@ -34,6 +34,18 @@ jobs:
         LOOKBACK_DAYS: "14"
         ALLOW_UNDATED_ITEMS: "false"
 
+        # 경쟁사 공고수
+        JOB_SAMPLE_LIMIT: "50"
+
+        SARAMIN_JOB_LIST_URL: "https://www.saramin.co.kr/zf_user/jobs/theme/it-headhunting"
+        SARAMIN_JOB_HREF_CONTAINS: "job-search/view?cn=theme&cns=it-headhunting"
+
+        JOBKOREA_JOB_LIST_URL: "https://www.jobkorea.co.kr/OnePick/JobList?Ord=GcmCodeAmtDesc"
+        JOBKOREA_JOB_HREF_CONTAINS: "/Recruit/"
+
+        REMEMBER_JOB_LIST_URL: "https://career.rememberapp.co.kr/job/postings?search=%7B%22organizationType%22%3A%22without_headhunter%22%7D"
+        REMEMBER_JOB_HREF_CONTAINS: "/job/posting/"
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
