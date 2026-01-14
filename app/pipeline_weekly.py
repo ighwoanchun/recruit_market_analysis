@@ -160,6 +160,7 @@ def run_fact_cache_mode(settings: Settings, collected: Dict[str, List[Item]]) ->
 
     all_items = dedup_by_url(_flatten(collected), lambda x: x.url)
 
+    # 오래된 기사 제거
     filtered: List[Item] = []
     skipped_old = 0
     skipped_undated = 0
@@ -233,7 +234,6 @@ def run_weekly_strategy_report(settings: Settings) -> None:
     - Signal(A/B/C) 분류 → A/B만 사용
     - '미분류'/'비교기사'는 가설 생성 제외
     - 경쟁사별 가설 → 원티드 대응 도출
-    - 공고 샘플 기반 직무군 분포 섹션을 맨 아래에 추가
     - Slack 1페이지 리포트 전송
     """
     llm = _vertex_llm_from_env()
@@ -274,6 +274,7 @@ def run_weekly_strategy_report(settings: Settings) -> None:
 
         facts = [p.get("fact", {}) for p in plist if isinstance(p.get("fact", {}), dict)]
 
+        # Signal classification per fact, keep A/B only
         ab_facts = []
         for f in facts:
             try:
@@ -289,7 +290,7 @@ def run_weekly_strategy_report(settings: Settings) -> None:
         if not ab_facts:
             continue
 
-        hyp = hypothesizer.infer(ab_facts[:8])
+        hyp = hypothesizer.infer(ab_facts[:8])  # cap to reduce tokens
         resp = responder.propose(hyp)
 
         hypothesis_by_company[key] = hyp
@@ -330,13 +331,16 @@ def main() -> None:
     fact_cache_mode = _env_bool("FACT_CACHE_MODE", False)
     weekly_strategy_mode = _env_bool("WEEKLY_STRATEGY_REPORT_MODE", False)
 
+    # 1) cache facts (optional)
     if fact_cache_mode:
         run_fact_cache_mode(settings, collected)
 
+    # 2) strategy report (optional)
     if weekly_strategy_mode:
         run_weekly_strategy_report(settings)
         return
 
+    # 3) default weekly draft report
     if not fact_cache_mode:
         run_default_weekly_report(settings, collected)
 
