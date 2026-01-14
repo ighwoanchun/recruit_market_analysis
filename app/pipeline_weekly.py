@@ -11,7 +11,6 @@ from .collector_rss import Item, collect_news_for_competitor
 from .dedup import dedup_by_url
 from .fact_extractor_vertex import FactExtractor
 from .facts_read import read_fact_payloads
-from .job_section_builder import CompetitorJobSource, build_jobs_section
 from .report_generator import build_draft_report, to_markdown
 from .report_strategy_renderer import render_strategy_report
 from .signal_classifier_vertex import SignalClassifier
