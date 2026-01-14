@@ -305,35 +305,6 @@ def run_weekly_strategy_report(settings: Settings) -> None:
         payloads_by_company=payloads_by_key,
     )
 
-    # ---- Append Job Posting Analysis Section (Prototype) ----
-    job_sources = [
-        CompetitorJobSource(
-            name="사람인",
-            list_url=os.environ.get("SARAMIN_JOB_LIST_URL", "").strip(),
-            href_contains=os.environ.get("SARAMIN_JOB_HREF_CONTAINS", "").strip(),
-            limit=_env_int("JOB_SAMPLE_LIMIT", 30),
-        ),
-        CompetitorJobSource(
-            name="잡코리아",
-            list_url=os.environ.get("JOBKOREA_JOB_LIST_URL", "").strip(),
-            href_contains=os.environ.get("JOBKOREA_JOB_HREF_CONTAINS", "").strip(),
-            limit=_env_int("JOB_SAMPLE_LIMIT", 30),
-        ),
-        CompetitorJobSource(
-            name="리멤버",
-            list_url=os.environ.get("REMEMBER_JOB_LIST_URL", "").strip(),
-            href_contains=os.environ.get("REMEMBER_JOB_HREF_CONTAINS", "").strip(),
-            limit=_env_int("JOB_SAMPLE_LIMIT", 30),
-        ),
-    ]
-    job_sources = [s for s in job_sources if s.list_url and s.href_contains]
-
-    if job_sources:
-        jobs_section = build_jobs_section(job_sources)
-        report_text = report_text.rstrip() + "\n\n" + jobs_section
-    else:
-        report_text = report_text.rstrip() + "\n\n" + "*[공고 샘플 기반 직무군 분포(경쟁사별)]*\n- (설정된 리스트 URL/href 패턴이 없어 스킵)\n"
-
     reports_dir = Path("reports")
     reports_dir.mkdir(parents=True, exist_ok=True)
     (reports_dir / "weekly_strategy_report.md").write_text(report_text, encoding="utf-8")
